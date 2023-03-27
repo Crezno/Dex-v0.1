@@ -1,0 +1,59 @@
+const { ApiPromise, WsProvider } = require('@polkadot/api');
+const { Keyring } = require('@polkadot/keyring');
+const { cryptoWaitReady } = require('@polkadot/util-crypto');
+const { Decimal } = require('decimal.js');
+
+async function main () {
+  const provider = new WsProvider('wss://testnet.impact.io');
+  const api = await ApiPromise.create({ provider });
+
+  // Wait for the crypto library to be ready
+  await cryptoWaitReady();
+
+  // Create a keyring instance for the user
+  const keyring = new Keyring({ type: 'sr25519' });
+  const alice = keyring.addFromUri('//Alice');
+
+  // Get the token symbols for the base and quote assets
+  const baseSymbol = 'BSTY';
+  const quoteSymbol = 'USDT';
+
+  // Get the token IDs for the base and quote assets
+  const baseToken = await api.query.dex.erc20Symbols(baseSymbol);
+  const quoteToken = await api.query.dex.erc20Symbols(quoteSymbol);
+
+  // Get the liquidity pool ID for the base/quote asset pair
+  const poolId = await api.query.dex.liquidityPoolIds(baseToken, quoteToken);
+
+  // Get the liquidity pool instance for the base/quote asset pair
+  const pool = await api.query.dex.liquidityPools(poolId);
+
+  // Get the user's balances for the base and quote assets
+  const baseBalance = await api.query.tokens.accounts(alice.address, baseToken);
+  const quoteBalance = await api.query.tokens.accounts(alice.address, quoteToken);
+
+  // Set up a user interface
+  const ui = new UserInterface();
+  ui.setBaseAsset(baseSymbol);
+  ui.setQuoteAsset(quoteSymbol);
+  ui.setBaseBalance(baseBalance);
+  ui.setQuoteBalance(quoteBalance);
+
+  // Listen for trade events
+  api.query.dex.trades((trades) => {
+    trades.forEach((trade) => {
+      // Update the user interface with the new trade
+      ui.addTrade(trade);
+    });
+  });
+
+  // Place a trade
+  const amountIn = new Decimal('1'); // amount of base asset to sell
+  const amountOutMin = new Decimal('0.9'); // minimum amount of quote asset to receive
+  const deadline = new Decimal(Date.now() + 1000 * 60 * 5); // trade expiration time (5 minutes from now)
+  const { extrinsic, amountOut } = api.tx.dex.swapWithExactInput(baseToken, quoteToken, amountIn.toString(), amountOutMin.toString(), deadline.toString());
+  await extrinsic.signAndSend(alice);
+
+  // Disconnect from the API
+  await api.disconnect();
+}
